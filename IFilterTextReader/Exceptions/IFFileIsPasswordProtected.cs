@@ -23,7 +23,7 @@ namespace IFilterTextReader.Exceptions
     /// Raised when an IFilter can not read the file because it is password protected
     /// </summary>
     [Serializable]
-    public class IFFileIsPasswordProtected : Exception
+	public class IFFileIsPasswordProtected : IFilterException
     {
         internal IFFileIsPasswordProtected(SerializationInfo info, StreamingContext context) : base(info, context) { }
 

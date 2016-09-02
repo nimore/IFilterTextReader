@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -24,10 +25,11 @@ using IFilterTextReader.Exceptions;
 
 namespace IFilterTextReader
 {
-    /// <summary>
-    /// This class is a <see cref="TextReader"/> wrapper around an <see cref="NativeMethods.IFilter"/>. This way a file can be processed 
-    /// like if it is a dead normal text file
-    /// </summary>
+	/// <summary>
+	/// This class is a <see cref="TextReader" /> wrapper around an <see cref="NativeMethods.IFilter" />. This way a file can be processed
+	/// like if it is a dead normal text file
+	/// </summary>
+	/// <seealso cref="System.IO.TextReader" />
     public class FilterReader : TextReader
     {
         #region Delegates
@@ -45,6 +47,25 @@ namespace IFilterTextReader
         /// </summary>
         public event UnmappedPropertyEventHandler UnmappedPropertyEvent;
         #endregion
+
+		/// <summary>
+		/// The _properties
+		/// </summary>
+		private readonly Dictionary<string,string> _properties;
+
+		/// <summary>
+		/// Gets the properties.
+		/// </summary>
+		/// <value>
+		/// The properties.
+		/// </value>
+		public IReadOnlyDictionary<string, string> Properties
+		{
+			get
+			{
+				return new ReadOnlyDictionary<string, string>(_properties);
+			}
+		}
 
         #region Fields
         /// <summary>
@@ -136,6 +157,7 @@ namespace IFilterTextReader
                                                " bits IFilter installed for the extension '" + extension + "'");
                 }
             
+				_properties = new Dictionary<string, string>();
                 _includeProperties = includeProperties;
             }
             catch (Exception)
@@ -174,6 +196,7 @@ namespace IFilterTextReader
                 throw new IFFilterNotFound("There is no " + (Environment.Is64BitProcess ? "64" : "32") +
                                            " bits IFilter installed for the stream with the extension '" + extension + "'");
 
+			_properties = new Dictionary<string, string>();
             _includeProperties = includeProperties;
         }
 
@@ -185,6 +208,18 @@ namespace IFilterTextReader
             Dispose(false);
         }
         #endregion
+
+
+		/// <summary>
+		/// Specifies the filter DLL and CLSID to use for the provided extension.
+		/// </summary>
+		/// <param name="extension">The extension.</param>
+		/// <param name="dllName">Name of the DLL.</param>
+		/// <param name="filterPersistClass">The filter persist CLSID.</param>
+		public static void SpecifyFilterDllAndClass(string extension, string dllName, string filterPersistClass)
+		{			
+			FilterLoader.AddFilterDllAndClassToCache(extension, dllName, filterPersistClass);
+		}
 
         #region ReadLine
         /// <summary>
@@ -383,11 +418,11 @@ namespace IFilterTextReader
 
                     case NativeMethods.CHUNKSTATE.CHUNK_VALUE:
 
-                        if (!_includeProperties)
-                        {
-                            _chunkValid = false;
-                            continue;
-                        }
+						////if (!_includeProperties)
+						////{
+						////	_chunkValid = false;
+						////	continue;
+						////}
 
                         var valuePtr = IntPtr.Zero;
                         var valueResult = _filter.GetValue(ref valuePtr);
@@ -403,12 +438,15 @@ namespace IFilterTextReader
                             case NativeMethods.IFilterReturnCode.S_OK:
                             case NativeMethods.IFilterReturnCode.FILTER_S_LAST_VALUES:
                                 var temp = GetPropertyNameAndValue(valuePtr);
-                                if (!string.IsNullOrEmpty(temp))
-                                {
-                                    textBuffer = temp.ToCharArray();
-                                    textLength = (uint) textBuffer.Length;
-                                    textRead = true;
-                                }
+								if (_includeProperties)
+								{
+									if (!string.IsNullOrEmpty(temp))
+									{
+										textBuffer = temp.ToCharArray();
+										textLength = (uint)textBuffer.Length;
+										textRead = true;
+									}
+								}
     
                                 _chunkValid = false;
                                 break;
@@ -553,27 +591,35 @@ namespace IFilterTextReader
         /// <returns>Name and value of the property or null when the property is empty</returns>
         private string GetPropertyNameAndValue(IntPtr valuePtr)
         {
-            var propertyVariant = (NativeMethods.PROPVARIANT)
-                Marshal.PtrToStructure(valuePtr, typeof(NativeMethods.PROPVARIANT));
+            var propertyVariant = (NativeMethods.PROPVARIANT)Marshal.PtrToStructure(valuePtr, typeof(NativeMethods.PROPVARIANT));
+			UnmappedPropertyEventHandler unmappedEventHandler = null;
 
             try
             {
-                if (string.IsNullOrWhiteSpace(propertyVariant.Value.ToString()))
-                    return null;
+				if (string.IsNullOrWhiteSpace(propertyVariant.Value.ToString()))
+				{
+					return null;
+				}
 
                 // Read the string property
                 if (_chunk.attribute.psProperty.ulKind == NativeMethods.PROPSPECKIND.PRSPEC_LPWSTR)
                 {
                     var propertyNameString = Marshal.PtrToStringUni(_chunk.attribute.psProperty.data);
+					if(!string.IsNullOrWhiteSpace(propertyNameString))
+					{
+						_properties.Add(propertyNameString, propertyVariant.Value.ToString());
+					}
                     return propertyNameString + " : " + propertyVariant.Value + "\n";
                 }
                 else
                 {
-                    var property = PropertyMapper.GetProperty(_chunk.attribute.guidPropSet,
-                        (long) _chunk.attribute.psProperty.data);
+                    var property = PropertyMapper.GetProperty(_chunk.attribute.guidPropSet, (long) _chunk.attribute.psProperty.data);
 
-                    if (!string.IsNullOrEmpty(property))
-                        return property + " : " + propertyVariant.Value + "\n";
+					if (!string.IsNullOrEmpty(property))
+					{
+						_properties.Add(property, propertyVariant.Value.ToString());
+						return property + " : " + propertyVariant.Value + "\n";
+					}
 
                     // Reader the property guid and id
                     var propertyKey = new NativeMethods.PROPERTYKEY
@@ -582,28 +628,65 @@ namespace IFilterTextReader
                         pid = (long)_chunk.attribute.psProperty.data
                     };
 
-                    string propertyName;
+                    string propertyName = null;
+					string canonicalName = null;
                     var result = NativeMethods.PSGetNameFromPropertyKey(ref propertyKey, out propertyName);
-                    if (result == 0)
-                    {
-                        if (UnmappedPropertyEvent != null)
-                            UnmappedPropertyEvent(this,
-                                new UnmappedPropertyEventArgs(_chunk.attribute.guidPropSet,
-                                    _chunk.attribute.psProperty.data.ToString(), propertyName,
-                                    propertyVariant.Value.ToString()));
+					////if (result == 0)
+					////{
+					////	unmappedEventHandler = UnmappedPropertyEvent;
+					////	if (unmappedEventHandler != null)
+					////	{
+					////		unmappedEventHandler(this,
+					////			new UnmappedPropertyEventArgs(_chunk.attribute.guidPropSet,
+					////				_chunk.attribute.psProperty.data.ToString(), propertyName,
+					////				propertyVariant.Value.ToString()));
+					////	}
 
-                        return propertyName + " : " + propertyVariant.Value + "\n";
-                    }
-                    else
-                    {
-                        if (UnmappedPropertyEvent != null)
-                            UnmappedPropertyEvent(this,
-                                new UnmappedPropertyEventArgs(_chunk.attribute.guidPropSet,
-                                    _chunk.attribute.psProperty.data.ToString(), null, propertyVariant.Value.ToString())); 
-                        
-                        return _chunk.attribute.guidPropSet + "/" + _chunk.attribute.psProperty.data + " : " +
-                               propertyVariant.Value + "\n";
-                    }
+					////	if (!string.IsNullOrWhiteSpace(propertyName))
+					////	{
+					////		_properties.Add(propertyName, propertyVariant.Value.ToString());
+					////	}
+					////	return propertyName + " : " + propertyVariant.Value + "\n";
+					////}
+					////else
+					////{
+					////	unmappedEventHandler = UnmappedPropertyEvent;
+					////	if (unmappedEventHandler != null)
+					////	{
+					////		unmappedEventHandler(this,
+					////			new UnmappedPropertyEventArgs(_chunk.attribute.guidPropSet,
+					////				_chunk.attribute.psProperty.data.ToString(), null, propertyVariant.Value.ToString()));
+					////	}
+
+					////	propertyName = _chunk.attribute.guidPropSet + "/" + _chunk.attribute.psProperty.data;
+
+					////	if (!string.IsNullOrWhiteSpace(propertyName))
+					////	{
+					////		_properties.Add(propertyName, propertyVariant.Value.ToString());
+					////	}
+					////	return propertyName + " : " + propertyVariant.Value + "\n";
+					////}
+
+					if (result == 0)
+					{
+						canonicalName = propertyName;						
+					}
+					else
+					{
+						propertyName = _chunk.attribute.guidPropSet + "/" + _chunk.attribute.psProperty.data;						
+					}
+
+					unmappedEventHandler = UnmappedPropertyEvent;
+					if (unmappedEventHandler != null)
+					{
+						unmappedEventHandler(this, new UnmappedPropertyEventArgs(_chunk.attribute.guidPropSet, _chunk.attribute.psProperty.data.ToString(), canonicalName, propertyVariant.Value.ToString()));
+					}
+
+					if (!string.IsNullOrWhiteSpace(propertyName))
+					{
+						_properties.Add(propertyName, propertyVariant.Value.ToString());
+					}
+					return propertyName + " : " + propertyVariant.Value + "\n";
                 }
             }
             finally

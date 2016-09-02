@@ -23,7 +23,7 @@ namespace IFilterTextReader.Exceptions
     /// Raised when a file or IFilter cannot be accessed 
     /// </summary>
     [Serializable]
-    public class IFAccesFailure : Exception
+    public class IFAccesFailure : IFilterException
     {
         internal IFAccesFailure(SerializationInfo info, StreamingContext context) : base(info, context) { }
 

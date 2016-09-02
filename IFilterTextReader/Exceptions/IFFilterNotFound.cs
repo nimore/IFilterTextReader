@@ -23,7 +23,7 @@ namespace IFilterTextReader.Exceptions
     /// Raised when there is no IFilter installed for a file type
     /// </summary>
     [Serializable]
-    public class IFFilterNotFound : Exception
+	public class IFFilterNotFound : IFilterException
     {
         internal IFFilterNotFound(SerializationInfo info, StreamingContext context) : base(info, context) { }
 

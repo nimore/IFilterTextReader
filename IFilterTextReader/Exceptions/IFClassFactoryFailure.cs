@@ -23,7 +23,7 @@ namespace IFilterTextReader.Exceptions
     /// Raised when it is not possible to get the class object from an IFilter
     /// </summary>
     [Serializable]
-    public class IFClassFactoryFailure : Exception
+	public class IFClassFactoryFailure : IFilterException
     {
         internal IFClassFactoryFailure(SerializationInfo info, StreamingContext context) : base(info, context) { }
 

@@ -7,7 +7,7 @@ namespace IFilterTextReader.Exceptions
     /// Raised when an old <see cref="NativeMethods.IFilter"/> format is used and no filename is supplied
     /// </summary>
     [Serializable]
-    public class IFOldFilterFormat : Exception
+	public class IFOldFilterFormat : IFilterException
     {
         internal IFOldFilterFormat(SerializationInfo info, StreamingContext context) : base(info, context) { }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -56,7 +57,7 @@ namespace IFilterTextReader
         /// <summary>
         /// Contains cached IFilter lookups
         /// </summary>
-        private readonly static Dictionary<string, CacheEntry> FilterCache = new Dictionary<string, CacheEntry>();
+		private readonly static ConcurrentDictionary<string, CacheEntry> FilterCache = new ConcurrentDictionary<string, CacheEntry>();
 
         /// <summary>
         /// The <see cref="ComHelpers"/> object
@@ -149,7 +150,19 @@ namespace IFilterTextReader
                 {
                     // Copy the content to global memory
                     var buffer = new byte[stream.Length];
-                    stream.Read(buffer, 0, buffer.Length);
+					////stream.Read(buffer, 0, buffer.Length);
+					int offset = 0;
+					int remaining = buffer.Length;
+					while (remaining > 0)
+					{
+						int read = stream.Read(buffer, offset, remaining);
+						if (read <= 0)
+						{
+							throw new EndOfStreamException(String.Format("End of stream reached with {0} bytes left to read", remaining));
+						}
+						remaining -= read;
+						offset += read;
+					}                    
                     var nativePtr = Marshal.AllocHGlobal(buffer.Length);
                     Marshal.Copy(buffer, 0, nativePtr, buffer.Length);
                     NativeMethods.CreateStreamOnHGlobal(nativePtr, true, out comStream);
@@ -212,7 +225,7 @@ namespace IFilterTextReader
                                     "Class: " + filterPersistClass + "'", exception);
             }
         }
-        #endregion
+        #endregion		
 
         #region GetFilterDll
         /// <summary>
@@ -230,17 +243,39 @@ namespace IFilterTextReader
             
             var persistentHandlerClass = GetPersistentHandlerClass(extension, true);
 
-            if (persistentHandlerClass != null)
-                if (
-                    !GetFilterDllAndClassFromPersistentHandler(persistentHandlerClass, out dllName,
-                        out filterPersistClass))
-                    throw new IFFilterNotFound("Could not find a " +
-                                               (Environment.Is64BitProcess ? "64" : "32") +
-                                               " bits IFilter dll for a file with an '" + extension +
-                                               "' extension");
+			if (persistentHandlerClass != null)
+			{
+				if (!GetFilterDllAndClassFromPersistentHandler(persistentHandlerClass, out dllName, out filterPersistClass))
+				{
+					throw new IFFilterNotFound("Could not find a " +
+											   (Environment.Is64BitProcess ? "64" : "32") +
+											   " bits IFilter dll for a file with an '" + extension +
+											   "' extension");
+				}
 
-            FilterCache.Add(extension.ToUpperInvariant(), new CacheEntry(dllName, filterPersistClass));
+				AddFilterDllAndClassToCache(extension, dllName, filterPersistClass);
+			}
         }
+
+		internal static void AddFilterDllAndClassToCache(string extension, string dllName, string filterPersistClass)
+		{
+			if (string.IsNullOrWhiteSpace(extension))
+			{
+				throw new ArgumentException("extension");
+			}
+
+			if (string.IsNullOrWhiteSpace(dllName))
+			{
+				throw new ArgumentException("dllName");
+			}
+
+			if (string.IsNullOrWhiteSpace(filterPersistClass))
+			{
+				throw new ArgumentException("filterPersistClass");
+			}
+
+			FilterCache.TryAdd(extension.ToUpperInvariant(), new CacheEntry(dllName, filterPersistClass));
+		}
 
         /// <summary>
         /// Returns true when an filter dll has been found based on the persistent handler class
@@ -360,13 +395,13 @@ namespace IFilterTextReader
         {
             var ext = extension.ToUpperInvariant();
 
-            CacheEntry cacheEntry;
-            if (FilterCache.TryGetValue(ext, out cacheEntry))
-            {
-                dllName = cacheEntry.DllName;
-                filterPersistClass = cacheEntry.ClassName;
-                return true;
-            }
+            CacheEntry cacheEntry;			
+			if (FilterCache.TryGetValue(ext, out cacheEntry))
+			{
+				dllName = cacheEntry.DllName;
+				filterPersistClass = cacheEntry.ClassName;
+				return true;
+			}			
 
             dllName = null;
             filterPersistClass = null;
